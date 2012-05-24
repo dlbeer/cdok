@@ -24,6 +24,7 @@ else
 endif
 
 CC ?= gcc
+PREFIX ?= /usr/local
 CDOK_CFLAGS = -O2 -Wall -DGIT_VERSION='"$(GIT_COMMIT_NAME)$(GIT_DIRTY)"' \
 	      -DBUILD_DATE='"$(BUILD_DATE)"'
 
@@ -38,3 +39,9 @@ clean:
 
 %.o: %.c
 	$(CC) $(CFLAGS) $(CDOK_CFLAGS) -o $*.o -c $*.c
+
+install: cdok
+	install -m 0755 -o root -g root cdok $(DESTDIR)$(PREFIX)/bin
+
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/cdok
