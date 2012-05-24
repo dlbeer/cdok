@@ -324,6 +324,7 @@ static void usage(const char *progname)
 static void version(void)
 {
 	printf("cdok -- Calcudoku solver/generator\n"
+"Revision " GIT_VERSION ", built " BUILD_DATE "\n"
 "Copyright (C) 2012 Daniel Beer <dlbeer@gmail.com>\n"
 "\n"
 "Permission to use, copy, modify, and/or distribute this software for any\n"

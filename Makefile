@@ -13,8 +13,19 @@
 # ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 # OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
+GIT_COMMIT_NAME := $(shell git rev-parse --verify --short HEAD)
+GIT_STATUS := $(shell git status --porcelain)
+BUILD_DATE := $(shell date)
+
+ifeq ($(GIT_STATUS),)
+	GIT_DIRTY =
+else
+	GIT_DIRTY = +
+endif
+
 CC ?= gcc
-CDOK_CFLAGS = -O2 -Wall
+CDOK_CFLAGS = -O2 -Wall -DGIT_VERSION='"$(GIT_COMMIT_NAME)$(GIT_DIRTY)"' \
+	      -DBUILD_DATE='"$(BUILD_DATE)"'
 
 all: cdok
 
