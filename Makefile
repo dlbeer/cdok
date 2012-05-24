@@ -18,7 +18,7 @@ CDOK_CFLAGS = -O2 -Wall
 
 all: cdok
 
-cdok: main.o cdok.o parser.o printer.o solver.o
+cdok: main.o cdok.o parser.o printer.o solver.o generator.o
 	$(CC) -o $@ $^
 
 clean:

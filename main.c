@@ -20,17 +20,29 @@
 #include <errno.h>
 #include <getopt.h>
 
+#include <time.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+
 #include "cdok.h"
 #include "parser.h"
 #include "printer.h"
 #include "solver.h"
+#include "generator.h"
 
 #define OPT_FLAG_UNICODE	0x01
+#define OPT_FLAG_TWO_CELL	0x02
 
 struct command;
 
 struct options {
 	int			flags;
+	int			gen_size;
+	int			gen_iterations;
+	int			gen_limit;
+	int			gen_target;
 	const char		*in_file;
 	const char		*out_file;
 	const struct command	*command;
@@ -116,8 +128,10 @@ static void write_puzzle(FILE *out, int flags,
 
 static void write_summary(FILE *out, int ret, int diff)
 {
-	fprintf(out, "Solution is %sunique. Difficulty: %d\n",
-		ret ? "not " : "", diff);
+	if (ret)
+		fprintf(out, "Solution is not unique.\n");
+	else
+		fprintf(out, "Solution is unique. Difficulty: %d\n", diff);
 }
 
 static int cmd_print(const struct options *opt)
@@ -177,6 +191,76 @@ static int cmd_examine(const struct options *opt)
 	return do_solve(opt, 0);
 }
 
+static int cmd_gen_grid(const struct options *opt)
+{
+	struct cdok_puzzle puz;
+	FILE *out;
+
+	cdok_init_puzzle(&puz, opt->gen_size);
+	cdok_generate_grid(puz.values, opt->gen_size);
+
+	out = open_output(opt->out_file);
+	if (!out)
+		return -1;
+
+	cdok_print_puzzle(&puz, puz.values, out);
+	return close_output(opt->out_file, out);
+}
+
+static int do_harden(const struct options *opt,
+		     const uint8_t *solution, int size)
+
+{
+	struct cdok_puzzle puz;
+	FILE *out;
+	int r;
+
+	r = cdok_generate(&puz, solution, size,
+			  (opt->flags & OPT_FLAG_TWO_CELL) ?
+			  CDOK_FLAGS_TWO_CELL : CDOK_FLAGS_NONE,
+			  opt->gen_iterations,
+			  opt->gen_limit,
+			  opt->gen_target);
+
+	out = open_output(opt->out_file);
+	if (!out)
+		return -1;
+
+	write_puzzle(out, opt->flags, &puz, puz.values);
+	fprintf(out, "\nDifficulty: %d\n", r);
+	return close_output(opt->out_file, out);
+}
+
+static int cmd_harden(const struct options *opt)
+{
+	struct cdok_puzzle puz;
+	uint8_t solution[CDOK_CELLS];
+	int r;
+
+	if (read_puzzle(opt->in_file, &puz) < 0)
+		return -1;
+
+	r = cdok_solve(&puz, solution, NULL);
+	if (r < 0) {
+		fprintf(stderr, "Puzzle is not solvable\n");
+		return -1;
+	}
+
+	if (r)
+		fprintf(stderr, "warning: input grid solution is "
+			"not unique\n");
+
+	return do_harden(opt, solution, puz.size);
+}
+
+static int cmd_generate(const struct options *opt)
+{
+	uint8_t solution[CDOK_CELLS];
+
+	cdok_generate_grid(solution, opt->gen_size);
+	return do_harden(opt, solution, opt->gen_size);
+}
+
 struct command {
 	const char	*name;
 	int		(*func)(const struct options *opt);
@@ -186,6 +270,9 @@ static const struct command command_table[] = {
 	{"print",		cmd_print},
 	{"solve",		cmd_solve},
 	{"examine",		cmd_examine},
+	{"gen-grid",		cmd_gen_grid},
+	{"harden",		cmd_harden},
+	{"generate",		cmd_generate},
 	{NULL, NULL}
 };
 
@@ -216,13 +303,21 @@ static void usage(const char *progname)
 "    -u           Use Unicode (UTF-8) line-drawing characters.\n"
 "    -i filename  Read from the given file (default stdin).\n"
 "    -o filename  Write to the given file (default stdout).\n"
+"    -T           Restrict difference and ratio groups to two cells.\n"
+"    -s size      Specify generator grid size (default 6).\n"
+"    -w num       Maximum generator iterations (default 20).\n"
+"    -m diff      Maximum puzzle difficulty (default 0, no limit).\n"
+"    -t diff      Threshold difficulty for early stop (default 0, none).\n"
 "    --help       Show this text.\n"
 "    --version    Show version information.\n"
 "\n"
 "Available commands:\n"
 "    print        Parse a grid spec and print it.\n"
 "    solve        Parse a grid spec and solve the puzzle.\n"
-"    examine      Parse a grid spec and estimate difficulty.\n",
+"    examine      Parse a grid spec and estimate difficulty.\n"
+"    gen-grid     Produce a valid solution grid.\n"
+"    harden       Read a solution grid or puzzle and produce a new puzzle.\n"
+"    generate     Produce a puzzle.\n",
 	       progname);
 }
 
@@ -254,9 +349,37 @@ static int parse_options(int argc, char **argv, struct options *opt)
 	int o;
 
 	memset(opt, 0, sizeof(*opt));
+	opt->gen_iterations = 20;
+	opt->gen_size = 6;
 
-	while ((o = getopt_long(argc, argv, "i:o:u", longopts, NULL)) >= 0)
+	while ((o = getopt_long(argc, argv, "i:o:uTs:w:m:t:",
+				longopts, NULL)) >= 0)
 		switch (o) {
+		case 'T':
+			opt->flags |= OPT_FLAG_TWO_CELL;
+			break;
+
+		case 's':
+			opt->gen_size = atoi(optarg);
+			if (opt->gen_size < 1 || opt->gen_size > CDOK_SIZE) {
+				fprintf(stderr, "Invalid grid size: %d\n",
+					opt->gen_size);
+				return -1;
+			}
+			break;
+
+		case 'w':
+			opt->gen_iterations = atoi(optarg);
+			break;
+
+		case 'm':
+			opt->gen_limit = atoi(optarg);
+			break;
+
+		case 't':
+			opt->gen_target = atoi(optarg);
+			break;
+
 		case 'u':
 			opt->flags |= OPT_FLAG_UNICODE;
 			break;
@@ -295,12 +418,28 @@ static int parse_options(int argc, char **argv, struct options *opt)
 	return 0;
 }
 
+static unsigned long get_seed(void)
+{
+	int fd = open("/dev/urandom", O_RDONLY);
+	unsigned long seed = time(NULL);
+
+	if (fd < 0)
+		return seed;
+
+	read(fd, &seed, sizeof(seed));
+	close(fd);
+
+	return seed;
+}
+
 int main(int argc, char **argv)
 {
 	struct options opt;
 
 	if (parse_options(argc, argv, &opt) < 0)
 		return -1;
+
+	srandom(get_seed());
 
 	return opt.command->func(&opt);
 }
