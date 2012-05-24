@@ -23,6 +23,7 @@
 #include "cdok.h"
 #include "parser.h"
 #include "printer.h"
+#include "solver.h"
 
 #define OPT_FLAG_UNICODE	0x01
 
@@ -73,8 +74,7 @@ static int read_puzzle(const char *fname, struct cdok_puzzle *puz)
 	return cdok_parser_end(&parse, puz);
 }
 
-static int write_puzzle(const char *fname, int flags,
-			const struct cdok_puzzle *puz, const uint8_t *values)
+static FILE *open_output(const char *fname)
 {
 	FILE *out = stdout;
 
@@ -83,17 +83,15 @@ static int write_puzzle(const char *fname, int flags,
 		if (!out) {
 			fprintf(stderr, "Can't open %s for writing: %s\n",
 				fname, strerror(errno));
-			return -1;
+			return NULL;
 		}
 	}
 
-	cdok_print_puzzle(puz, values, out);
-	fprintf(out, "\n");
+	return out;
+}
 
-	cdok_format_puzzle((flags & OPT_FLAG_UNICODE) ?
-			   &cdok_template_unicode : &cdok_template_ascii,
-			   puz, values, out);
-
+static int close_output(const char *fname, FILE *out)
+{
 	if (fname) {
 		if (fclose(out) < 0) {
 			fprintf(stderr, "Error on closing %s: %s\n",
@@ -105,14 +103,78 @@ static int write_puzzle(const char *fname, int flags,
 	return 0;
 }
 
+static void write_puzzle(FILE *out, int flags,
+			 const struct cdok_puzzle *puz, const uint8_t *values)
+{
+	cdok_print_puzzle(puz, values, out);
+	fprintf(out, "\n");
+
+	cdok_format_puzzle((flags & OPT_FLAG_UNICODE) ?
+			   &cdok_template_unicode : &cdok_template_ascii,
+			   puz, values, out);
+}
+
+static void write_summary(FILE *out, int ret, int diff)
+{
+	fprintf(out, "Solution is %sunique. Difficulty: %d\n",
+		ret ? "not " : "", diff);
+}
+
 static int cmd_print(const struct options *opt)
 {
 	struct cdok_puzzle puz;
+	FILE *out;
 
 	if (read_puzzle(opt->in_file, &puz) < 0)
 		return -1;
 
-	return write_puzzle(opt->out_file, opt->flags, &puz, puz.values);
+	out = open_output(opt->out_file);
+	if (!out)
+		return -1;
+
+	write_puzzle(out, opt->flags, &puz, puz.values);
+	return close_output(opt->out_file, out);
+}
+
+static int do_solve(const struct options *opt, int want_solution)
+{
+	struct cdok_puzzle puz;
+	uint8_t solution[CDOK_CELLS];
+	FILE *out;
+	int diff = 0;
+	int r;
+
+	if (read_puzzle(opt->in_file, &puz) < 0)
+		return -1;
+
+	r = cdok_solve(&puz, solution, &diff);
+	if (r < 0) {
+		fprintf(stderr, "Puzzle is not solvable\n");
+		return -1;
+	}
+
+	out = open_output(opt->out_file);
+	if (!out)
+		return -1;
+
+	if (want_solution) {
+		write_puzzle(out, opt->flags, &puz, solution);
+		fprintf(out, "\n");
+	}
+
+	write_summary(out, r, diff);
+
+	return close_output(opt->out_file, out);
+}
+
+static int cmd_solve(const struct options *opt)
+{
+	return do_solve(opt, 1);
+}
+
+static int cmd_examine(const struct options *opt)
+{
+	return do_solve(opt, 0);
 }
 
 struct command {
@@ -122,6 +184,8 @@ struct command {
 
 static const struct command command_table[] = {
 	{"print",		cmd_print},
+	{"solve",		cmd_solve},
+	{"examine",		cmd_examine},
 	{NULL, NULL}
 };
 
@@ -156,7 +220,9 @@ static void usage(const char *progname)
 "    --version    Show version information.\n"
 "\n"
 "Available commands:\n"
-"    print        Parse a grid spec and print it.\n",
+"    print        Parse a grid spec and print it.\n"
+"    solve        Parse a grid spec and solve the puzzle.\n"
+"    examine      Parse a grid spec and estimate difficulty.\n",
 	       progname);
 }
 
